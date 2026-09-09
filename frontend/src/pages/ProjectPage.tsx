@@ -190,7 +190,7 @@ export default function ProjectPage() {
                           <span className="text-muted">{act.summary}</span>
                         </div>
                         <span className="text-xs text-muted whitespace-nowrap ml-4">
-                          {new Date(act.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(act.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                         </span>
                       </li>
                     ))}
