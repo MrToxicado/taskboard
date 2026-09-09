@@ -97,3 +97,27 @@ class TestTasks:
 
         response = client.delete(f'/api/tasks/{task.id}')
         assert response.status_code == 403
+
+    def test_update_task_requires_edit_permission(self, client, user):
+        owner = User.objects.create_user(email='owner@example.com', name='Owner', password='password123')
+        project = Project.objects.create(name='P', owner=owner)
+        Membership.objects.create(user=owner, project=project, role='admin')
+        Membership.objects.create(user=user, project=project, role='viewer')
+        task = Task.objects.create(project=project, title='Original Title', created_by=owner)
+
+        resp = client.post('/api/auth/login', {'email': 'meera@taskboard.dev', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['token']}")
+
+        # Viewer attempt to update -> 403 Forbidden
+        response = client.patch(f'/api/tasks/{task.id}', {'title': 'Updated Title'}, format='json')
+        assert response.status_code == 403
+
+        # Upgrade user to member -> 200 OK
+        membership = Membership.objects.get(user=user, project=project)
+        membership.role = 'member'
+        membership.save()
+
+        response = client.patch(f'/api/tasks/{task.id}', {'title': 'Updated Title'}, format='json')
+        assert response.status_code == 200
+        assert response.data['task']['title'] == 'Updated Title'
+
