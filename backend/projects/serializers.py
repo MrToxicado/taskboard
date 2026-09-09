@@ -6,13 +6,17 @@ from .models import Project, Membership, Task, Comment
 class CommentSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     task_id = serializers.SerializerMethodField()
+    createdAt = serializers.SerializerMethodField()
 
     def get_task_id(self, obj):
         return str(obj.task_id)
 
+    def get_createdAt(self, obj):
+        return obj.created_at.isoformat() if obj.created_at else None
+
     class Meta:
         model = Comment
-        fields = ['id', 'task_id', 'author', 'body', 'created_at']
+        fields = ['id', 'task_id', 'author', 'body', 'created_at', 'createdAt']
 
 
 class TaskSerializer(serializers.ModelSerializer):

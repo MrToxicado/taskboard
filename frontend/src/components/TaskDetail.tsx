@@ -160,7 +160,9 @@ export function TaskDetail({ task, projectId, members, onClose }: Props) {
                 <div key={c.id} className="bg-bg border border-border p-3 rounded-md text-xs">
                   <div className="flex justify-between items-center text-muted mb-1">
                     <span className="font-medium text-white">{c.author.name}</span>
-                    <span>{new Date(c.createdAt).toLocaleString()}</span>
+                    <span>
+                      {new Date(c.createdAt || (c as any).created_at || Date.now()).toLocaleString()}
+                    </span>
                   </div>
                   <p className="text-sm text-gray-200 whitespace-pre-wrap">{c.body}</p>
                 </div>
