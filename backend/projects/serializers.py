@@ -1,6 +1,22 @@
 from rest_framework import serializers
 from users.serializers import UserSerializer
-from .models import Project, Membership, Task, Comment
+from .models import Project, Membership, Task, Comment, Activity
+
+
+class ActivitySerializer(serializers.ModelSerializer):
+    actor = UserSerializer(read_only=True)
+    project_id = serializers.SerializerMethodField()
+    createdAt = serializers.SerializerMethodField()
+
+    def get_project_id(self, obj):
+        return str(obj.project_id)
+
+    def get_createdAt(self, obj):
+        return obj.created_at.isoformat() if obj.created_at else None
+
+    class Meta:
+        model = Activity
+        fields = ['id', 'project_id', 'actor', 'action', 'summary', 'created_at', 'createdAt']
 
 
 class CommentSerializer(serializers.ModelSerializer):
@@ -69,10 +85,11 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     owner_id = serializers.SerializerMethodField()
     memberships = MembershipSerializer(many=True, read_only=True)
     tasks = TaskSerializer(many=True, read_only=True)
+    activities = ActivitySerializer(many=True, read_only=True)
 
     def get_owner_id(self, obj):
         return str(obj.owner_id)
 
     class Meta:
         model = Project
-        fields = ['id', 'name', 'description', 'owner_id', 'owner', 'memberships', 'tasks', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'description', 'owner_id', 'owner', 'memberships', 'tasks', 'activities', 'created_at', 'updated_at']

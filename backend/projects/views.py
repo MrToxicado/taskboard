@@ -1,10 +1,30 @@
+import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import connection
 from users.serializers import UserSerializer
-from .models import Project, Membership, Task, Comment
-from .serializers import ProjectDetailSerializer, TaskSerializer, CommentSerializer
+from .models import Project, Membership, Task, Comment, Activity
+from .serializers import ProjectDetailSerializer, TaskSerializer, CommentSerializer, ActivitySerializer
+
+logger = logging.getLogger(__name__)
+
+
+def _log_activity(project, actor, action, summary):
+    """
+    Non-blocking activity audit log write.
+    If activity write fails (e.g. database logging error), the original core change is NOT rolled back.
+    Primary domain logic transactions take precedence over audit logging.
+    """
+    try:
+        Activity.objects.create(
+            project=project,
+            actor=actor,
+            action=action,
+            summary=summary,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to record activity log: {exc}")
 
 
 def _get_membership(user, project_id):
@@ -157,6 +177,7 @@ class TaskListCreateView(APIView):
             created_by=request.user,
             position=position,
         )
+        _log_activity(task.project, request.user, 'task_created', f"{request.user.name} created task '{task.title}'")
         task_data = TaskSerializer(Task.objects.select_related('assignee').get(id=task.id)).data
         return Response({'task': task_data}, status=status.HTTP_201_CREATED)
 
@@ -164,7 +185,7 @@ class TaskListCreateView(APIView):
 class TaskDetailView(APIView):
     def patch(self, request, task_id):
         try:
-            task = Task.objects.select_related('project').get(id=task_id)
+            task = Task.objects.select_related('project', 'assignee').get(id=task_id)
         except Task.DoesNotExist:
             return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -173,6 +194,9 @@ class TaskDetailView(APIView):
             return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
         if not _can_edit_tasks(membership.role):
             return Response({'error': 'viewers cannot update tasks'}, status=status.HTTP_403_FORBIDDEN)
+
+        old_status = task.status
+        old_assignee_id = task.assignee_id
 
         if 'title' in request.data:
             task.title = request.data['title'].strip()
@@ -194,6 +218,13 @@ class TaskDetailView(APIView):
             task.assignee_id = request.data['assigneeId'] or None
         task.save()
 
+        if task.status != old_status:
+            _log_activity(task.project, request.user, 'status_changed', f"{request.user.name} changed status of '{task.title}' to '{task.status}'")
+        if task.assignee_id != old_assignee_id:
+            updated_task = Task.objects.select_related('assignee').get(id=task_id)
+            assignee_name = updated_task.assignee.name if updated_task.assignee else "Unassigned"
+            _log_activity(task.project, request.user, 'assignee_changed', f"{request.user.name} assigned '{task.title}' to {assignee_name}")
+
         task_data = TaskSerializer(Task.objects.select_related('assignee').get(id=task_id)).data
         return Response({'task': task_data})
 
@@ -209,7 +240,10 @@ class TaskDetailView(APIView):
         if not _can_edit_tasks(membership.role):
             return Response({'error': 'viewers cannot delete tasks'}, status=status.HTTP_403_FORBIDDEN)
 
+        project = task.project
+        title = task.title
         task.delete()
+        _log_activity(project, request.user, 'task_deleted', f"{request.user.name} deleted task '{title}'")
         return Response({'ok': True})
 
 
@@ -244,7 +278,23 @@ class TaskCommentListCreateView(APIView):
             return Response({'error': 'comment body is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         comment = Comment.objects.create(task=task, author=request.user, body=body)
+        _log_activity(task.project, request.user, 'comment_added', f"{request.user.name} commented on '{task.title}'")
         return Response({'comment': CommentSerializer(comment).data}, status=status.HTTP_201_CREATED)
+
+
+class ProjectActivityListView(APIView):
+    def get(self, request, project_id):
+        membership = _get_membership(request.user, project_id)
+        if not membership:
+            return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        activities = (
+            Activity.objects
+            .filter(project_id=project_id)
+            .select_related('actor')
+            .order_by('-created_at')
+        )
+        return Response({'activities': ActivitySerializer(activities, many=True).data})
 
 
 class MemberAddView(APIView):

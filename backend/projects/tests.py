@@ -313,4 +313,69 @@ class TestTaskComments:
         assert res_del.status_code == 405
 
 
+@pytest.mark.django_db
+class TestActivityFeed:
+    def test_activity_feed_logging_and_permissions(self, client):
+        admin = User.objects.create_user(email='act_admin@example.com', name='ActAdmin', password='password123')
+        viewer = User.objects.create_user(email='act_viewer@example.com', name='ActViewer', password='password123')
+        outsider = User.objects.create_user(email='act_outsider@example.com', name='ActOutsider', password='password123')
+
+        project = Project.objects.create(name='Activity Proj', owner=admin)
+        Membership.objects.create(user=admin, project=project, role='admin')
+        Membership.objects.create(user=viewer, project=project, role='viewer')
+
+        # 1. Login as admin and create task
+        resp_a = client.post('/api/auth/login', {'email': 'act_admin@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_a.data['token']}")
+
+        res_task = client.post(f'/api/projects/{project.id}/tasks', {'title': 'New Task for Activity'}, format='json')
+        assert res_task.status_code == 201
+        task_id = res_task.data['task']['id']
+
+        # 2. Update task status
+        res_patch = client.patch(f'/api/tasks/{task_id}', {'status': 'in_progress'}, format='json')
+        assert res_patch.status_code == 200
+
+        # 3. Add comment
+        res_comment = client.post(f'/api/tasks/{task_id}/comments', {'body': 'Activity comment'}, format='json')
+        assert res_comment.status_code == 201
+
+        # 4. Non-member read activities -> 403
+        resp_o = client.post('/api/auth/login', {'email': 'act_outsider@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_o.data['token']}")
+        res_act_out = client.get(f'/api/projects/{project.id}/activities')
+        assert res_act_out.status_code == 403
+
+        # 5. Viewer read activities -> 200 OK, ordered most recent first
+        resp_v = client.post('/api/auth/login', {'email': 'act_viewer@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_v.data['token']}")
+        res_act = client.get(f'/api/projects/{project.id}/activities')
+        assert res_act.status_code == 200
+        activities = res_act.data['activities']
+        assert len(activities) >= 3
+        # Most recent first check (comment_added -> status_changed -> task_created)
+        assert activities[0]['action'] == 'comment_added'
+        assert activities[1]['action'] == 'status_changed'
+        assert activities[2]['action'] == 'task_created'
+
+    def test_activity_write_failure_does_not_rollback_core_change(self, client):
+        admin = User.objects.create_user(email='act_fail@example.com', name='ActFail', password='password123')
+        project = Project.objects.create(name='Rollback Test Proj', owner=admin)
+        Membership.objects.create(user=admin, project=project, role='admin')
+
+        resp = client.post('/api/auth/login', {'email': 'act_fail@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['token']}")
+
+        with pytest.MonkeyPatch().context() as m:
+            def raise_error(*args, **kwargs):
+                raise Exception("Simulated DB logging error")
+            m.setattr('projects.views.Activity.objects.create', raise_error)
+
+            # Creating task should succeed even if activity logging fails
+            res = client.post(f'/api/projects/{project.id}/tasks', {'title': 'Task with Failing Activity Log'}, format='json')
+            assert res.status_code == 201
+            assert Task.objects.filter(title='Task with Failing Activity Log').exists()
+
+
+
 

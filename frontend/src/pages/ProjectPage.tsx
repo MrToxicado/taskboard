@@ -180,6 +180,28 @@ export default function ProjectPage() {
             </div>
 
             <section className="mt-10">
+              <h2 className="text-sm font-medium mb-3">recent activity feed</h2>
+              <div className="bg-surface border border-border rounded-lg p-4 max-h-60 overflow-y-auto">
+                {project.activities && project.activities.length > 0 ? (
+                  <ul className="space-y-3">
+                    {project.activities.map((act) => (
+                      <li key={act.id} className="text-sm flex items-center justify-between border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                        <div>
+                          <span className="text-muted">{act.summary}</span>
+                        </div>
+                        <span className="text-xs text-muted whitespace-nowrap ml-4">
+                          {new Date(act.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-muted">No recent activity recorded yet.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="mt-10">
               <h2 className="text-sm font-medium mb-3">members</h2>
               <ul className="bg-surface border border-border rounded-lg divide-y divide-border">
                 {project.memberships.map((m) => (
