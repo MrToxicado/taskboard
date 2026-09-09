@@ -15,6 +15,15 @@ export function TaskDetail({ task, projectId, members, onClose }: Props) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
+  const normalizeStatusKey = (s: string): TaskStatus => {
+    if (s === "To do" || s === "todo") return "todo";
+    if (s === "In progress" || s === "in_progress") return "in_progress";
+    if (s === "In review" || s === "review") return "review";
+    if (s === "Done" || s === "done") return "done";
+    return "todo";
+  };
+
+  const [status, setStatus] = useState<TaskStatus>(normalizeStatusKey(task.status));
   const initialAssigneeId = task.assigneeId || (task as any).assignee_id || task.assignee?.id || "";
   const [assigneeId, setAssigneeId] = useState<string>(initialAssigneeId);
   const [commentBody, setCommentBody] = useState("");

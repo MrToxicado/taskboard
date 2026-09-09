@@ -179,7 +179,14 @@ class TaskDetailView(APIView):
         if 'description' in request.data:
             task.description = request.data['description'] or None
         if 'status' in request.data:
-            new_status = request.data['status']
+            raw_status = request.data['status']
+            status_map = {
+                'todo': 'todo', 'To do': 'todo', 'to do': 'todo',
+                'in_progress': 'in_progress', 'In progress': 'in_progress', 'in progress': 'in_progress',
+                'review': 'review', 'In review': 'review', 'in review': 'review',
+                'done': 'done', 'Done': 'done',
+            }
+            new_status = status_map.get(raw_status, raw_status)
             if new_status not in ('todo', 'in_progress', 'review', 'done'):
                 return Response({'error': 'invalid status'}, status=status.HTTP_400_BAD_REQUEST)
             task.status = new_status
