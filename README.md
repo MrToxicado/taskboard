@@ -4,6 +4,11 @@ A fullstack project management app for managing projects, tasks, and team member
 
 **Tech Stack:** React 18 + Vite + TypeScript (frontend) · Django 5 + Django REST Framework + SimpleJWT (backend) · PostgreSQL 16
 
+## Screen Recording
+
+SCREEN RECORDING:
+TODO: Paste Loom URL here after recording the complete session.
+
 ## Quick Setup (Docker — Recommended)
 
 ```bash

@@ -22,5 +22,6 @@ build/
 .vscode/
 .idea/
 
-# AI conversations captured by pre-commit hook
-# (intentionally not ignored — they are part of the evaluation)
+# PDF files
+*.pdf
+
