@@ -7,6 +7,14 @@ export type ApiUser = {
   name: string;
 };
 
+export type ApiComment = {
+  id: string;
+  taskId: string;
+  author: ApiUser;
+  body: string;
+  createdAt: string;
+};
+
 export type ApiTask = {
   id: string;
   projectId: string;
@@ -19,6 +27,7 @@ export type ApiTask = {
   createdAt: string;
   updatedAt: string;
   assignee?: ApiUser | null;
+  comments?: ApiComment[];
 };
 
 export type ApiProjectMember = {

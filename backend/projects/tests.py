@@ -254,3 +254,63 @@ class TestAirtableExport:
         assert res['failed'] == 1
 
 
+@pytest.mark.django_db
+class TestTaskComments:
+    def test_comments_permissions_and_immutability(self, client, user):
+        admin_user = User.objects.create_user(email='admin@example.com', name='Admin', password='password123')
+        member_user = User.objects.create_user(email='member@example.com', name='Member', password='password123')
+        viewer_user = User.objects.create_user(email='viewer@example.com', name='Viewer', password='password123')
+        outsider = User.objects.create_user(email='outsider@example.com', name='Outsider', password='password123')
+
+        project = Project.objects.create(name='Comment Proj', owner=admin_user)
+        Membership.objects.create(user=admin_user, project=project, role='admin')
+        Membership.objects.create(user=member_user, project=project, role='member')
+        Membership.objects.create(user=viewer_user, project=project, role='viewer')
+
+        task = Task.objects.create(project=project, title='Task with comments', created_by=admin_user)
+
+        # 1. Non-member cannot read comments -> 403
+        resp_out = client.post('/api/auth/login', {'email': 'outsider@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_out.data['token']}")
+        res = client.get(f'/api/tasks/{task.id}/comments')
+        assert res.status_code == 403
+
+        # 2. Viewer can read but cannot post -> GET 200, POST 403
+        resp_v = client.post('/api/auth/login', {'email': 'viewer@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_v.data['token']}")
+        res = client.get(f'/api/tasks/{task.id}/comments')
+        assert res.status_code == 200
+        assert len(res.data['comments']) == 0
+
+        res_post_v = client.post(f'/api/tasks/{task.id}/comments', {'body': 'Viewer post'}, format='json')
+        assert res_post_v.status_code == 403
+
+        # 3. Member can post -> 201 Created
+        resp_m = client.post('/api/auth/login', {'email': 'member@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_m.data['token']}")
+        res_post_m = client.post(f'/api/tasks/{task.id}/comments', {'body': 'First member comment'}, format='json')
+        assert res_post_m.status_code == 201
+        c1_id = res_post_m.data['comment']['id']
+
+        # 4. Admin can post -> 201 Created
+        resp_a = client.post('/api/auth/login', {'email': 'admin@example.com', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp_a.data['token']}")
+        res_post_a = client.post(f'/api/tasks/{task.id}/comments', {'body': 'Second admin comment'}, format='json')
+        assert res_post_a.status_code == 201
+
+        # 5. Read returns comments chronologically
+        res_read = client.get(f'/api/tasks/{task.id}/comments')
+        assert res_read.status_code == 200
+        assert len(res_read.data['comments']) == 2
+        assert res_read.data['comments'][0]['body'] == 'First member comment'
+        assert res_read.data['comments'][1]['body'] == 'Second admin comment'
+
+        # 6. Comments are append-only (cannot edit or delete) -> 405 Method Not Allowed
+        res_patch = client.patch(f'/api/tasks/{task.id}/comments', {'body': 'Edit attempt'}, format='json')
+        assert res_patch.status_code == 405
+
+        res_del = client.delete(f'/api/tasks/{task.id}/comments')
+        assert res_del.status_code == 405
+
+
+

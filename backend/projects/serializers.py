@@ -1,6 +1,18 @@
 from rest_framework import serializers
 from users.serializers import UserSerializer
-from .models import Project, Membership, Task
+from .models import Project, Membership, Task, Comment
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    author = UserSerializer(read_only=True)
+    task_id = serializers.SerializerMethodField()
+
+    def get_task_id(self, obj):
+        return str(obj.task_id)
+
+    class Meta:
+        model = Comment
+        fields = ['id', 'task_id', 'author', 'body', 'created_at']
 
 
 class TaskSerializer(serializers.ModelSerializer):
@@ -8,6 +20,7 @@ class TaskSerializer(serializers.ModelSerializer):
     assignee_id = serializers.SerializerMethodField()
     project_id = serializers.SerializerMethodField()
     created_by_id = serializers.SerializerMethodField()
+    comments = CommentSerializer(many=True, read_only=True)
 
     def get_assignee_id(self, obj):
         return str(obj.assignee_id) if obj.assignee_id else None
@@ -22,7 +35,7 @@ class TaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             'id', 'project_id', 'title', 'description', 'status',
-            'assignee_id', 'created_by_id', 'position', 'created_at', 'updated_at', 'assignee',
+            'assignee_id', 'created_by_id', 'position', 'created_at', 'updated_at', 'assignee', 'comments',
         ]
 
 
