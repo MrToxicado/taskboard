@@ -15,8 +15,8 @@ export function TaskDetail({ task, projectId, members, onClose }: Props) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
-  const [status, setStatus] = useState<TaskStatus>(task.status);
-  const [assigneeId, setAssigneeId] = useState<string>(task.assigneeId ?? "");
+  const initialAssigneeId = task.assigneeId || (task as any).assignee_id || task.assignee?.id || "";
+  const [assigneeId, setAssigneeId] = useState<string>(initialAssigneeId);
   const [commentBody, setCommentBody] = useState("");
   const [error, setError] = useState<string | null>(null);
 

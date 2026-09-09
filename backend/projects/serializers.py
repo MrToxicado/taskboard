@@ -22,24 +22,37 @@ class CommentSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     assignee = UserSerializer(read_only=True)
     assignee_id = serializers.SerializerMethodField()
+    assigneeId = serializers.SerializerMethodField()
     project_id = serializers.SerializerMethodField()
+    projectId = serializers.SerializerMethodField()
     created_by_id = serializers.SerializerMethodField()
+    createdById = serializers.SerializerMethodField()
     comments = CommentSerializer(many=True, read_only=True)
 
     def get_assignee_id(self, obj):
         return str(obj.assignee_id) if obj.assignee_id else None
 
+    def get_assigneeId(self, obj):
+        return str(obj.assignee_id) if obj.assignee_id else None
+
     def get_project_id(self, obj):
+        return str(obj.project_id)
+
+    def get_projectId(self, obj):
         return str(obj.project_id)
 
     def get_created_by_id(self, obj):
         return str(obj.created_by_id)
 
+    def get_createdById(self, obj):
+        return str(obj.created_by_id)
+
     class Meta:
         model = Task
         fields = [
-            'id', 'project_id', 'title', 'description', 'status',
-            'assignee_id', 'created_by_id', 'position', 'created_at', 'updated_at', 'assignee', 'comments',
+            'id', 'project_id', 'projectId', 'title', 'description', 'status',
+            'assignee_id', 'assigneeId', 'created_by_id', 'createdById', 'position',
+            'created_at', 'updated_at', 'assignee', 'comments',
         ]
 
 
