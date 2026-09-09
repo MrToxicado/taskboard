@@ -121,3 +121,136 @@ class TestTasks:
         assert response.status_code == 200
         assert response.data['task']['title'] == 'Updated Title'
 
+
+class MockAirtableTable:
+    def __init__(self, existing_records=None, transient_failures=0, permanent_failure=False, fail_on_task_id=None):
+        self.records = existing_records or []
+        self.created = []
+        self.updated = []
+        self.transient_failures = transient_failures
+        self.permanent_failure = permanent_failure
+        self.fail_on_task_id = fail_on_task_id
+        self.all_calls = 0
+
+    def all(self, formula=None):
+        self.all_calls += 1
+        if self.permanent_failure:
+            err = Exception("401 Unauthorized")
+            err.status_code = 401
+            raise err
+        if self.transient_failures > 0:
+            self.transient_failures -= 1
+            err = Exception("429 Rate Limit Exceeded")
+            err.status_code = 429
+            raise err
+
+        if formula and "Task ID" in formula:
+            task_id = formula.split("'")[1]
+            if self.fail_on_task_id and task_id == self.fail_on_task_id:
+                err = Exception("400 Bad Request - Invalid Record")
+                err.status_code = 400
+                raise err
+            return [r for r in self.records if r['fields'].get('Task ID') == task_id]
+        return self.records
+
+    def create(self, fields):
+        rec = {'id': f'rec_{len(self.records)+1}', 'fields': fields}
+        self.records.append(rec)
+        self.created.append(rec)
+        return rec
+
+    def update(self, rec_id, fields):
+        for r in self.records:
+            if r['id'] == rec_id:
+                r['fields'].update(fields)
+                self.updated.append(r)
+                return r
+        return None
+
+
+@pytest.mark.django_db
+class TestAirtableExport:
+    def test_export_authorization_roles(self, client, user):
+        owner = User.objects.create_user(email='owner@example.com', name='Owner', password='password123')
+        project = Project.objects.create(name='P', owner=owner)
+        Membership.objects.create(user=owner, project=project, role='admin')
+        Membership.objects.create(user=user, project=project, role='viewer')
+        Task.objects.create(project=project, title='Task 1', created_by=owner)
+
+        # Unauthenticated user -> 401
+        response = client.post(f'/api/projects/{project.id}/export')
+        assert response.status_code == 401
+
+        # Viewer user -> 403
+        resp = client.post('/api/auth/login', {'email': 'meera@taskboard.dev', 'password': 'password123'}, format='json')
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {resp.data['token']}")
+        response = client.post(f'/api/projects/{project.id}/export')
+        assert response.status_code == 403
+
+        # Upgrade viewer to member -> 200
+        mem = Membership.objects.get(user=user, project=project)
+        mem.role = 'member'
+        mem.save()
+        mock_table = MockAirtableTable()
+        with pytest.MonkeyPatch().context() as m:
+            class DummyApi:
+                def __init__(self, key): pass
+                def table(self, base_id, table_name): return mock_table
+            m.setattr('projects.airtable_service.Api', DummyApi)
+            m.setenv('AIRTABLE_API_KEY', 'pat123')
+            m.setenv('AIRTABLE_BASE_ID', 'app123')
+            response = client.post(f'/api/projects/{project.id}/export')
+            assert response.status_code == 200
+            assert response.data['summary']['created'] == 1
+
+    def test_airtable_mapping_and_idempotency(self, user):
+        from projects.airtable_service import export_tasks_to_airtable
+        project = Project.objects.create(name='Proj A', owner=user)
+        task = Task.objects.create(project=project, title='Export Me', description='Desc', created_by=user)
+        
+        mock_table = MockAirtableTable()
+        res1 = export_tasks_to_airtable([task], airtable_api_client=mock_table)
+        assert res1['created'] == 1
+        assert res1['updated'] == 0
+        assert mock_table.records[0]['fields']['Task ID'] == str(task.id)
+        assert mock_table.records[0]['fields']['Title'] == 'Export Me'
+
+        # Second export run -> updates existing record without duplicating
+        res2 = export_tasks_to_airtable([task], airtable_api_client=mock_table)
+        assert res2['created'] == 0
+        assert res2['updated'] == 1
+        assert len(mock_table.records) == 1
+
+    def test_transient_error_retry(self, user):
+        from projects.airtable_service import export_tasks_to_airtable
+        project = Project.objects.create(name='Proj B', owner=user)
+        task = Task.objects.create(project=project, title='Retry Task', created_by=user)
+        
+        mock_table = MockAirtableTable(transient_failures=1)
+        res = export_tasks_to_airtable([task], airtable_api_client=mock_table, backoff_factor=0.01)
+        assert res['created'] == 1
+        assert res['failed'] == 0
+
+    def test_permanent_error_no_retry(self, user):
+        from projects.airtable_service import export_tasks_to_airtable
+        project = Project.objects.create(name='Proj C', owner=user)
+        task = Task.objects.create(project=project, title='Perm Task', created_by=user)
+        
+        mock_table = MockAirtableTable(permanent_failure=True)
+        res = export_tasks_to_airtable([task], airtable_api_client=mock_table, backoff_factor=0.01)
+        assert res['failed'] == 1
+        assert mock_table.all_calls == 1
+
+    def test_single_record_failure_does_not_abort_entire_export(self, user):
+        from projects.airtable_service import export_tasks_to_airtable
+        project = Project.objects.create(name='Proj D', owner=user)
+        t1 = Task.objects.create(project=project, title='T1 Fail', created_by=user)
+        t2 = Task.objects.create(project=project, title='T2 Pass', created_by=user)
+
+        mock_table = MockAirtableTable(fail_on_task_id=str(t1.id))
+        res = export_tasks_to_airtable([t1, t2], airtable_api_client=mock_table, backoff_factor=0.01)
+        assert res['total'] == 2
+        assert res['created'] == 1
+        assert res['failed'] == 1
+
+

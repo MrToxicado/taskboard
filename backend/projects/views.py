@@ -245,5 +245,11 @@ class ExportView(APIView):
         if not _can_edit_tasks(membership.role):
             return Response({'error': 'only admins and members can export'}, status=status.HTTP_403_FORBIDDEN)
 
-        tasks = Task.objects.filter(project_id=project_id).select_related('assignee', 'created_by')
-        return Response({'exported': 0, 'tasks': TaskSerializer(tasks, many=True).data})
+        tasks = list(Task.objects.filter(project_id=project_id).select_related('assignee', 'project'))
+        
+        from .airtable_service import export_tasks_to_airtable
+        try:
+            summary = export_tasks_to_airtable(tasks)
+            return Response({'ok': True, 'summary': summary, 'tasks': TaskSerializer(tasks, many=True).data})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -53,6 +53,18 @@ export default function ProjectPage() {
     }
   }
 
+  const currentUser = getStoredUser();
+  const currentMembership = project?.memberships.find((m) => m.user.id === currentUser?.id);
+  const canExport = currentMembership?.role === "admin" || currentMembership?.role === "member";
+
+  const [exportResult, setExportResult] = useState<{ summary?: { total: number; created: number; updated: number; failed: number }; error?: string } | null>(null);
+
+  const exportMutation = useMutation({
+    mutationFn: () => apiFetch<{ summary: { total: number; created: number; updated: number; failed: number } }>(`/api/projects/${id}/export`, { method: "POST" }),
+    onSuccess: (res) => setExportResult({ summary: res.summary }),
+    onError: (err) => setExportResult({ error: err instanceof Error ? err.message : "export failed" }),
+  });
+
   return (
     <div className="min-h-screen">
       <Header />
@@ -86,6 +98,30 @@ export default function ProjectPage() {
                   owner: {project.owner.name} · {project.memberships.length} members
                 </p>
               </div>
+              {canExport && (
+                <div className="flex flex-col items-end">
+                  <button
+                    onClick={() => {
+                      setExportResult(null);
+                      exportMutation.mutate();
+                    }}
+                    disabled={exportMutation.isPending}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {exportMutation.isPending ? "Exporting..." : "Export to Airtable"}
+                  </button>
+                  {exportResult?.summary && (
+                    <p className="text-xs text-emerald-400 mt-2" role="status">
+                      Exported {exportResult.summary.total} tasks (Created: {exportResult.summary.created}, Updated: {exportResult.summary.updated}, Failed: {exportResult.summary.failed})
+                    </p>
+                  )}
+                  {exportResult?.error && (
+                    <p className="text-xs text-red-400 mt-2" role="alert">
+                      Export failed: {exportResult.error}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <section className="bg-surface border border-border rounded-lg p-4 mb-6">
