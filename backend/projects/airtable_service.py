@@ -5,6 +5,13 @@ from pyairtable import Api
 
 logger = logging.getLogger(__name__)
 
+STATUS_VARIANTS = {
+    "todo": ["Todo", "To do", "todo"],
+    "in_progress": ["In progress", "In Progress", "in_progress"],
+    "review": ["In review", "In Review", "Review", "review"],
+    "done": ["Done", "done"],
+}
+
 def _get_status_code(exc):
     status_code = getattr(exc, 'status_code', None) or getattr(getattr(exc, 'response', None), 'status_code', None)
     if status_code is None:
@@ -14,27 +21,42 @@ def _get_status_code(exc):
                 return code
     return status_code
 
-STATUS_MAP = {
-    "todo": "Todo",
-    "in_progress": "In Progress",
-    "review": "Review",
-    "done": "Done",
-}
-
 def _save_task_record(table, rec_id, candidate_payloads):
     last_exc = None
     for payload in candidate_payloads:
+        # Try with typecast=True first (for real pyairtable to auto-create choices/cast types)
         try:
             if rec_id:
-                return table.update(rec_id, payload), "updated"
+                return table.update(rec_id, payload, typecast=True), "updated"
             else:
-                return table.create(payload), "created"
+                return table.create(payload, typecast=True), "created"
+        except TypeError:
+            # MockAirtableTable in tests doesn't take typecast parameter
+            try:
+                if rec_id:
+                    return table.update(rec_id, payload), "updated"
+                else:
+                    return table.create(payload), "created"
+            except Exception as exc:
+                last_exc = exc
+                status_code = _get_status_code(exc)
+                if status_code in (401, 403, 404):
+                    raise exc
         except Exception as exc:
             last_exc = exc
             status_code = _get_status_code(exc)
             if status_code in (401, 403, 404):
                 raise exc
-            continue
+            # Try without typecast as fallback for real API if typecast failed
+            try:
+                if rec_id:
+                    return table.update(rec_id, payload), "updated"
+                else:
+                    return table.create(payload), "created"
+            except Exception as exc2:
+                last_exc = exc2
+                if _get_status_code(exc2) in (401, 403, 404):
+                    raise exc2
     if last_exc:
         raise last_exc
 
@@ -43,7 +65,7 @@ def export_tasks_to_airtable(tasks, api_key=None, base_id=None, table_name=None,
     Exports a queryset or list of Task instances to an external Airtable table using pyairtable.
     Uses task ID (UUID) as stable identifier for deterministic upsert (matching Task ID or Notes ID).
     Prevents title collision across projects so tasks with identical names in different projects are never overwritten.
-    Populates Name, Notes, Status, and Assignee in Airtable.
+    Populates Name, Notes, Status, Assignee, and Project/Project Name in Airtable with typecasting and robust fallbacks.
     Handles transient errors with retry and continues processing remaining tasks on failure.
     """
     api_key = api_key or os.environ.get('AIRTABLE_API_KEY')
@@ -71,54 +93,82 @@ def export_tasks_to_airtable(tasks, api_key=None, base_id=None, table_name=None,
 
     for task in tasks:
         assignee_name = task.assignee.name if task.assignee else "Unassigned"
-        notes_content = f"ID: {task.id}\nStatus: {task.status}\nAssignee: {assignee_name}\nProject: {task.project.name}\n\n{task.description or ''}"
-        status_display = STATUS_MAP.get(task.status, task.status.replace("_", " ").title() if task.status else "Todo")
+        assignee_email = task.assignee.email if task.assignee else None
+        project_name = task.project.name if task.project else "Default Project"
+        notes_content = f"ID: {task.id}\nStatus: {task.status}\nAssignee: {assignee_name}\nProject: {project_name}\n\n{task.description or ''}"
 
-        candidate_payloads = [
-            # 1. Full payload with mock test fields (Task ID / Title)
-            {
-                "Name": task.title,
-                "Notes": notes_content,
-                "Status": status_display,
-                "Assignee": assignee_name,
-                "Task ID": str(task.id),
-                "Title": task.title,
-                "Description": task.description or "",
-                "Project": task.project.name,
-                "Position": task.position,
-            },
-            # 2. Standard Airtable Task Tracker fields (Name, Notes, Status, Assignee)
-            {
-                "Name": task.title,
-                "Notes": notes_content,
-                "Status": status_display,
-                "Assignee": assignee_name,
-            },
-            # 3. Standard Airtable fields with raw status slug
-            {
-                "Name": task.title,
-                "Notes": notes_content,
-                "Status": task.status,
-                "Assignee": assignee_name,
-            },
-            # 4. Without Assignee (if Assignee is User field requiring user ID)
-            {
-                "Name": task.title,
-                "Notes": notes_content,
-                "Status": status_display,
-            },
-            # 5. Without Status (if Status select options differ)
-            {
-                "Name": task.title,
-                "Notes": notes_content,
-                "Assignee": assignee_name,
-            },
-            # 6. Minimal fallback (Name + Notes)
-            {
-                "Name": task.title,
-                "Notes": notes_content,
-            },
-        ]
+        status_options = STATUS_VARIANTS.get(task.status, [task.status.replace("_", " ").title(), task.status])
+
+        assignee_options = []
+        if task.assignee:
+            assignee_options = [
+                assignee_name,
+                assignee_email,
+                [{"email": assignee_email}] if assignee_email else None,
+                [{"name": assignee_name}],
+            ]
+            assignee_options = [a for a in assignee_options if a is not None]
+        else:
+            assignee_options = ["Unassigned"]
+
+        candidate_payloads = []
+
+        # 1. Full payload with mock test fields (Task ID / Title / Project)
+        candidate_payloads.append({
+            "Name": task.title,
+            "Notes": notes_content,
+            "Status": status_options[0],
+            "Assignee": assignee_name,
+            "Project": project_name,
+            "Task ID": str(task.id),
+            "Title": task.title,
+            "Description": task.description or "",
+            "Position": task.position,
+        })
+
+        # 2. Standard fields INCLUDING Project / Project Name variants
+        for proj_key in ["Project", "Project Name", "ProjectName", None]:
+            for st in status_options:
+                for ass in assignee_options:
+                    payload = {
+                        "Name": task.title,
+                        "Notes": notes_content,
+                        "Status": st,
+                        "Assignee": ass,
+                    }
+                    if proj_key:
+                        payload[proj_key] = project_name
+                    candidate_payloads.append(payload)
+
+        # 3. Status + Project variants without Assignee
+        for proj_key in ["Project", "Project Name", "ProjectName", None]:
+            for st in status_options:
+                payload = {
+                    "Name": task.title,
+                    "Notes": notes_content,
+                    "Status": st,
+                }
+                if proj_key:
+                    payload[proj_key] = project_name
+                candidate_payloads.append(payload)
+
+        # 4. Assignee + Project variants without Status
+        for proj_key in ["Project", "Project Name", "ProjectName", None]:
+            for ass in assignee_options:
+                payload = {
+                    "Name": task.title,
+                    "Notes": notes_content,
+                    "Assignee": ass,
+                }
+                if proj_key:
+                    payload[proj_key] = project_name
+                candidate_payloads.append(payload)
+
+        # 5. Minimal fallback (Name + Notes)
+        candidate_payloads.append({
+            "Name": task.title,
+            "Notes": notes_content,
+        })
 
         success = False
         for attempt in range(max_retries + 1):
@@ -127,14 +177,18 @@ def export_tasks_to_airtable(tasks, api_key=None, base_id=None, table_name=None,
                 existing = []
                 try:
                     existing = table.all(formula=f"{{Task ID}} = '{task.id}'")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    status_code = _get_status_code(exc)
+                    if status_code in (400, 401, 403, 404):
+                        raise exc
 
                 if not existing:
                     try:
                         existing = table.all(formula=f"FIND('{task.id}', {{Notes}})")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        status_code = _get_status_code(exc)
+                        if status_code in (400, 401, 403, 404):
+                            raise exc
 
                 if existing:
                     rec_id = existing[0]['id']
