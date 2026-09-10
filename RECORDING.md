@@ -1,4 +1,4 @@
 # Screen Recording
 
 SCREEN RECORDING:
-TODO: Paste Loom URL here after recording the complete session.
+[TaskBoard Session Recording Walkthrough](https://app.screencastify.com/watch/R7RZqLb9CsnAvGfcXTwJ)
